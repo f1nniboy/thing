@@ -13,10 +13,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EVENTS: dict[str, str] = {
-    "on_message": "self, ctx: ThingContext",
-    "on_ready": "self",
-}
+SUPPORTED_EVENTS: frozenset[str] = frozenset(
+    {
+        "message",
+        "ready",
+        "reaction_add",
+        "reaction_remove",
+        "member_join",
+        "member_remove",
+        "message_edit",
+        "message_delete",
+    }
+)
 
 
 @dataclass
@@ -37,10 +45,6 @@ class EventBroker:
     def register(
         self, event_name: str, func_name: str, callback: Callable[..., Any], owner: str
     ):
-        if event_name not in SUPPORTED_EVENTS:
-            raise ValueError(
-                f"unsupported event '{event_name}'. supported: {', '.join(SUPPORTED_EVENTS)}"
-            )
         self._handlers.setdefault(event_name, []).append(
             HandlerEntry(event_name, func_name, callback, owner)
         )

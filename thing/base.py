@@ -61,12 +61,12 @@ def event(event_name: str):
     Decorator to register a method as a discord event handler.
 
     Examples:
-        @event("on_message")
-        async def watch_channel(self, ctx: ThingContext):
-            if ctx.message.channel.id == 123456789:
-                await ctx.message.reply(content=ctx.message.content)
+        @event("message")
+        async def watch_channel(self, message: discord.Message):
+            if message.channel.id == 123456789:
+                await message.reply(content=message.content)
 
-        @event("on_ready")
+        @event("ready")
         async def on_ready(self):
             print("bot is ready")
     """
@@ -94,6 +94,12 @@ class Thing:
     Do NOT override __init__ - use setup() for async initialisation and unload() for cleanup.
     Do NOT import Thing, DB, command, event, ThingContext, or discord -
     they are all pre-injected into the module namespace.
+
+    Available instance attributes (set by __init__, do NOT redefine):
+        self.bot    - discord.Client instance
+        self.db     - DB persistent key-value store
+        self.ai     - AI API instance
+        self.logger - logging.Logger for this Thing
     """
 
     NAME: str = "unnamed"

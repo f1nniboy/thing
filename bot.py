@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import override
+from typing import Any, override
 
 import discord
 from discord import app_commands
@@ -10,6 +10,7 @@ from discord import app_commands
 from ai.api import API
 from config import ALLOWED_USERS, DISCORD_TOKEN
 from dispatch.context import ThingContext
+from dispatch.events import SUPPORTED_EVENTS
 from slash import build_thing_group
 from thing.manager import ThingManager
 
@@ -24,11 +25,20 @@ class Bot(discord.Client):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
+        intents.members = True
         super().__init__(intents=intents)
 
         self.tree = app_commands.CommandTree(self)
         self.ai = API()
         self.manager = ThingManager(self, self.ai)
+
+    @override
+    def dispatch(self, event: str, /, *args: Any, **kwargs: Any) -> None:
+        super().dispatch(event, *args, **kwargs)
+        if event in SUPPORTED_EVENTS:
+            asyncio.get_running_loop().create_task(
+                self.manager.event_broker.emit(event, *args, **kwargs)
+            )
 
     @override
     async def setup_hook(self):
@@ -38,7 +48,6 @@ class Bot(discord.Client):
     async def on_ready(self):
         logger.info("online as %s", self.user)
         asyncio.create_task(self._sync())
-        await self.manager.event_broker.emit("on_ready")
 
     async def _sync(self):
         try:
@@ -56,8 +65,7 @@ class Bot(discord.Client):
             author=message.author,
             guild=message.guild,
         )
-        if not await self.manager.command_handler.dispatch(ctx):
-            await self.manager.event_broker.emit("on_message", ctx)
+        await self.manager.command_handler.dispatch(ctx)
 
 
 if __name__ == "__main__":

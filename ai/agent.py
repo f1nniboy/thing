@@ -8,7 +8,7 @@ from ai.api import API
 from ai.prompt import build_system_prompt
 from ai.tools import TOOL_MAP, TOOL_SCHEMAS
 from ai.types import AgentResult, AgentState, DeployResult
-from config import MAX_TOOL_CALLS, VERSION_HISTORY_LIMIT
+from config import MAX_TOOL_CALLS
 from thing.manager import ThingEntry
 from utils.clean_for_display import clean_for_display
 
@@ -16,13 +16,6 @@ if TYPE_CHECKING:
     from thing.manager import ThingManager
 
 logger = logging.getLogger(__name__)
-
-
-def _prune_file_states(messages: list[dict[str, Any]], indices: list[int], limit: int):
-    while len(indices) > limit:
-        old_idx = indices.pop(0)
-        if old_idx < len(messages):
-            messages[old_idx]["content"] = "[pruned - superseded by later version]"
 
 
 class AgentRunner:
@@ -149,12 +142,6 @@ class AgentRunner:
                     progress_cb(line)
 
                 messages.append({"role": "tool", "content": result})
-
-                if tool_name in ("write_file", "patch_file"):
-                    state.file_state_indices.append(len(messages) - 1)
-                    _prune_file_states(
-                        messages, state.file_state_indices, VERSION_HISTORY_LIMIT
-                    )
 
                 if state.done:
                     break

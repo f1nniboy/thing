@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -20,7 +20,6 @@ class AgentState:
     api: API
     content: str | None = None
     deploy: DeployResult | None = None
-    file_state_indices: list[int] = field(default_factory=list)
     tool_call_count: int = 0
     done: bool = False
     summary: str = ""

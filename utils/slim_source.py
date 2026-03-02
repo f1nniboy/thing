@@ -33,9 +33,15 @@ def slim_source(source: str) -> str:
             elif isinstance(node, ast.ClassDef):
                 process_class(node, out)
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if not node.name.startswith("_"):
+                if node.name == "__init__" or not node.name.startswith("_"):
                     process_func(node, out)
             elif isinstance(node, (ast.AnnAssign, ast.Assign)):
+                if (
+                    isinstance(node, ast.AnnAssign)
+                    and isinstance(node.target, ast.Name)
+                    and node.target.id.startswith("_")
+                ):
+                    continue
                 emit_lines(node.lineno, node.end_lineno, out)
             elif is_docstring(node):
                 emit_lines(node.lineno, node.end_lineno, out)
