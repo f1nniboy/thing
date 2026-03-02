@@ -113,7 +113,7 @@ def build_help(entry: CommandEntry) -> str:
         if "default" not in spec:
             return ""
         val = spec["default"]
-        return f" (default: {val if val != '' else '<empty>'})"
+        return f" (default: {val if val != '' and val is not None else '<empty>'})"
 
     def _flag_sig(key: str, spec: dict[str, Any]) -> str:
         typ = spec.get("type", bool)

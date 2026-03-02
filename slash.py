@@ -86,11 +86,10 @@ def build_thing_group(manager: ThingManager) -> app_commands.Group:
         prompt: str,
         existing_entry: ThingEntry | None = None,
     ):
-        await interaction.response.defer()
-
         name = existing_entry.name if existing_entry else None
         embed = ui.agent_progress(name)
-        msg = await interaction.followup.send(embed=embed, wait=True)
+        await interaction.response.send_message(embed=embed)
+        msg = await interaction.original_response()
         log = ProgressLog(msg, embed)
 
         try:
@@ -164,12 +163,11 @@ def build_thing_group(manager: ThingManager) -> app_commands.Group:
                 embed=ui.not_found(name), ephemeral=True
             )
             return
-        await interaction.response.defer()
         try:
             await manager.reload(name)
-            await interaction.followup.send(embed=ui.thing_reloaded(name))
+            await interaction.response.send_message(embed=ui.thing_reloaded(name))
         except Exception as e:
-            await interaction.followup.send(embed=ui.reload_failed(name, e))
+            await interaction.response.send_message(embed=ui.reload_failed(name, e))
 
     @group.command(name="overview", description="list things, or inspect one")
     @app_commands.describe(name="thing to inspect")
