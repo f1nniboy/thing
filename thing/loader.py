@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 import logging
 import sys
 import types
@@ -56,46 +55,11 @@ def extract_thing_info(code: str) -> ThingInfo:
                             info.requirements = [
                                 s for s in value if isinstance(s, str) and s.strip()
                             ]
-                    except Exception as e:
-                        logger.warning("failed to parse REQUIREMENTS: %s", e)
+                    except Exception:
+                        logger.warning("failed to parse REQUIREMENTS", exc_info=True)
         if info.name is not None:
             break  # found the Thing class, no need to keep walking
     return info
-
-
-async def _try_install(cmd: list[str], packages: list[str]) -> bool:
-    """Run an install command. Returns True on success, False if the tool is unavailable."""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            *packages,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-    except FileNotFoundError:
-        return False
-    try:
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.communicate()
-        raise RuntimeError(f"package install timed out: {packages}")
-    if proc.returncode != 0:
-        raise RuntimeError(f"package install failed:\n{stderr.decode()}")
-    return True
-
-
-async def pip_install(packages: list[str]):
-    for cmd in (
-        ["uv", "pip", "install"],
-        [sys.executable, "-m", "pip", "install"],
-    ):
-        if await _try_install(cmd, packages):
-            logger.info("installed %s via %s", packages, cmd[0])
-            return
-    raise RuntimeError(
-        f"cannot install packages {packages}: no package manager available. rewrite without external dependencies."
-    )
 
 
 def load_module(source: str, injected: dict[str, Any], name: str) -> types.ModuleType:

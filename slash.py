@@ -20,8 +20,15 @@ def _allowed(interaction: discord.Interaction) -> bool:
     return interaction.user.id in ALLOWED_USERS
 
 
-async def _deny(interaction: discord.Interaction):
-    await interaction.response.send_message(embed=ui.access_denied(), ephemeral=True)
+async def _require_thing(
+    interaction: discord.Interaction, manager: ThingManager, name: str
+) -> ThingEntry | None:
+    entry = manager.get(name)
+    if not entry:
+        await interaction.response.send_message(
+            embed=ui.not_found(name), ephemeral=True
+        )
+    return entry
 
 
 def _make_deploy_cb(
@@ -71,6 +78,16 @@ def build_thing_group(manager: ThingManager) -> app_commands.Group:
     event_broker = manager.event_broker
     runner = AgentRunner(manager, manager.ai)
 
+    @group.error
+    async def _on_error(  # pyright: ignore[reportUnusedFunction]
+        interaction: discord.Interaction, error: app_commands.AppCommandError
+    ):
+        if isinstance(error, app_commands.CheckFailure):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    embed=ui.access_denied(), ephemeral=True
+                )
+
     async def name_autocomplete(_interaction: discord.Interaction, current: str):
         return [
             app_commands.Choice(name=n, value=n)
@@ -100,42 +117,40 @@ def build_thing_group(manager: ThingManager) -> app_commands.Group:
             logger.error("failed to run agent", exc_info=True)
             final_embed = ui.agent_failed(name, e)
         else:
-            final_embed = ui.thing_summary_embed(result, command_handler, event_broker)
+            if result.name is None:
+                final_embed = ui.agent_refused(name, result.summary)
+            else:
+                entry = manager.get(result.name)
+                assert entry is not None
+                final_embed = ui.thing_summary_embed(
+                    result, entry, command_handler, event_broker
+                )
         finally:
             await log.stop()
         await msg.edit(embed=final_embed)
 
     @group.command(name="create", description="generate and load a new thing")
     @app_commands.describe(prompt="what this thing should do")
+    @app_commands.check(_allowed)
     async def thing_create(interaction: discord.Interaction, prompt: str):  # pyright: ignore[reportUnusedFunction]
-        if not _allowed(interaction):
-            return await _deny(interaction)
         await _run_agent_command(interaction, prompt)
 
     @group.command(name="change", description="modify an existing thing")
     @app_commands.describe(name="thing to change", prompt="what to change")
     @app_commands.autocomplete(name=name_autocomplete)
+    @app_commands.check(_allowed)
     async def thing_change(interaction: discord.Interaction, name: str, prompt: str):  # pyright: ignore[reportUnusedFunction]
-        if not _allowed(interaction):
-            return await _deny(interaction)
-        entry = manager.get(name)
-        if not entry:
-            await interaction.response.send_message(
-                embed=ui.not_found(name), ephemeral=True
-            )
+        entry = await _require_thing(interaction, manager, name)
+        if entry is None:
             return
         await _run_agent_command(interaction, prompt, existing_entry=entry)
 
     @group.command(name="remove", description="unload and delete a thing")
     @app_commands.describe(name="thing to remove")
     @app_commands.autocomplete(name=name_autocomplete)
+    @app_commands.check(_allowed)
     async def thing_remove(interaction: discord.Interaction, name: str):  # pyright: ignore[reportUnusedFunction]
-        if not _allowed(interaction):
-            return await _deny(interaction)
-        if not manager.get(name):
-            await interaction.response.send_message(
-                embed=ui.not_found(name), ephemeral=True
-            )
+        if await _require_thing(interaction, manager, name) is None:
             return
         await manager.remove(name)
         await interaction.response.send_message(embed=ui.thing_removed(name))
@@ -143,14 +158,9 @@ def build_thing_group(manager: ThingManager) -> app_commands.Group:
     @group.command(name="reload", description="reload a thing from disk")
     @app_commands.describe(name="thing to reload")
     @app_commands.autocomplete(name=name_autocomplete)
+    @app_commands.check(_allowed)
     async def thing_reload(interaction: discord.Interaction, name: str):  # pyright: ignore[reportUnusedFunction]
-        if not _allowed(interaction):
-            return await _deny(interaction)
-        entry = manager.get(name)
-        if not entry:
-            await interaction.response.send_message(
-                embed=ui.not_found(name), ephemeral=True
-            )
+        if await _require_thing(interaction, manager, name) is None:
             return
         try:
             await manager.reload(name)
@@ -161,20 +171,16 @@ def build_thing_group(manager: ThingManager) -> app_commands.Group:
     @group.command(name="show", description="list things, or inspect one")
     @app_commands.describe(name="thing to inspect")
     @app_commands.autocomplete(name=name_autocomplete)
+    @app_commands.check(_allowed)
     async def thing_show(  # pyright: ignore[reportUnusedFunction]
         interaction: discord.Interaction, name: str | None = None
     ):
-        if not _allowed(interaction):
-            return await _deny(interaction)
         if name:
-            entry = manager.get(name)
-            if not entry:
-                await interaction.response.send_message(
-                    embed=ui.not_found(name), ephemeral=True
-                )
+            entry = await _require_thing(interaction, manager, name)
+            if entry is None:
                 return
             await interaction.response.send_message(
-                embed=ui.thing_detail_embed(name, command_handler, event_broker),
+                embed=ui.thing_detail_embed(entry, command_handler, event_broker),
                 ephemeral=True,
             )
         else:
@@ -188,6 +194,16 @@ def build_thing_group(manager: ThingManager) -> app_commands.Group:
 
 def build_settings_group(manager: ThingManager) -> app_commands.Group:
     group = app_commands.Group(name="settings", description="...")
+
+    @group.error
+    async def _on_error(  # pyright: ignore[reportUnusedFunction]
+        interaction: discord.Interaction, error: app_commands.AppCommandError
+    ):
+        if isinstance(error, app_commands.CheckFailure):
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    embed=ui.access_denied(), ephemeral=True
+                )
 
     async def key_autocomplete(_interaction: discord.Interaction, current: str):
         choices = []
@@ -209,16 +225,14 @@ def build_settings_group(manager: ThingManager) -> app_commands.Group:
     @group.command(name="set", description="set or reset a config value")
     @app_commands.describe(key="config key", value="new value, omit to reset")
     @app_commands.autocomplete(key=key_autocomplete)
+    @app_commands.check(_allowed)
     async def settings_set(  # pyright: ignore[reportUnusedFunction]
         interaction: discord.Interaction, key: str, value: str | None = None
     ):
-        if not _allowed(interaction):
-            return await _deny(interaction)
-
         parts = key.split(".", 1)
         if len(parts) != 2:
             await interaction.response.send_message(
-                embed=ui.settings_error("Select a valid config option"),
+                embed=ui.settings_error("select a valid config option"),
                 ephemeral=True,
             )
             return
@@ -227,49 +241,38 @@ def build_settings_group(manager: ThingManager) -> app_commands.Group:
         cfg = manager.get_config(thing_name)
         if cfg is None or option_key not in cfg.options:
             await interaction.response.send_message(
-                embed=ui.settings_error(f"Unknown config option `{key}`"),
+                embed=ui.settings_error(f"unknown config option `{key}`"),
                 ephemeral=True,
             )
             return
 
         option = cfg.options[option_key]
 
-        if value is None or value == "":
-            await cfg.reset(option_key)
-            humanized = (
-                option.type.humanize(option.default)
-                if option.default is not None
-                else "*(none)*"
-            )
-            await interaction.response.send_message(
-                embed=ui.settings_updated(
-                    thing_name, option_key, humanized, reset=True
-                ),
-                ephemeral=True,
-            )
-            return
-
-        try:
-            typed_value = option.type.validate(value, manager.bot)
-        except ValueError as e:
-            await interaction.response.send_message(
-                embed=ui.settings_error(str(e)),
-                ephemeral=True,
-            )
-            return
+        typed_value = None
+        if value is not None:
+            try:
+                typed_value = option.type.validate(value)
+            except ValueError as e:
+                await interaction.response.send_message(
+                    embed=ui.settings_error(str(e)),
+                    ephemeral=True,
+                )
+                return
 
         await cfg.set(option_key, typed_value)
-        humanized = option.type.humanize(typed_value)
+        humanized = option.type.humanize(
+            option.default if typed_value is None else typed_value
+        )
         await interaction.response.send_message(
-            embed=ui.settings_updated(thing_name, option_key, humanized, reset=False),
+            embed=ui.settings_updated(
+                thing_name, option_key, humanized, reset=typed_value is None
+            ),
             ephemeral=True,
         )
 
     @group.command(name="show", description="show all settings and current values")
+    @app_commands.check(_allowed)
     async def settings_show(interaction: discord.Interaction):  # pyright: ignore[reportUnusedFunction]
-        if not _allowed(interaction):
-            return await _deny(interaction)
-
         entries = []
         for name in manager.names():
             entry = manager.get(name)

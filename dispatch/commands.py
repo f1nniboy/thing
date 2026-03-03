@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any
 import ui
 from config import COMMAND_PREFIX, HANDLER_TIMEOUT
 from dispatch.context import ThingContext
-from thing.base import CommandOption, CommandType
-from utils.sanitize_tb import sanitize_tb
+from utils.common import sanitize_tb
+from utils.option import CommandOption, OptionType
 
 if TYPE_CHECKING:
     from thing.manager import ThingManager
@@ -42,7 +42,7 @@ def format_signature(entry: CommandEntry) -> str:
     for opt in entry.schema:
         if opt.positional:
             continue
-        typ_str = f"=<{opt.type.label}>" if opt.type is not CommandType.Boolean else ""
+        typ_str = f"=<{opt.type.label}>" if opt.type is not OptionType.Boolean else ""
         parts.append(
             f"--{opt.key}{typ_str}" if opt.required else f"[--{opt.key}{typ_str}]"
         )
@@ -56,51 +56,44 @@ def parse_args(
     named = {o.key: o for o in schema if not o.positional}
     pos_opt = next((o for o in schema if o.positional), None)
 
-    # Phase 1: greedily consume leading --flags
+    # parse tokens
     i = 0
-    while i < len(tokens) and tokens[i].startswith("--"):
-        part = tokens[i][2:]
-        if "=" in part:
-            key, val = part.split("=", 1)
+    while i < len(tokens):
+        if tokens[i].startswith("--"):
+            part = tokens[i][2:]
+            if "=" in part:
+                key, val = part.split("=", 1)
+            else:
+                key, val = part, True
+            if key not in named:
+                return None, f"unknown option --{key}"
+            args[key] = val
+            i += 1
+        elif pos_opt:
+            args[pos_opt.key] = " ".join(tokens[i:])
+            break
         else:
-            key, val = part, True  # bare flag
-        if key not in named:
-            return None, f"unknown option --{key}"
-        if val is True and named[key].type is not CommandType.Boolean:
-            return None, f"--{key} is a flag but expects {named[key].type.label}"
-        args[key] = val
-        i += 1
+            return None, f"unexpected argument '{tokens[i]}'"
 
-    # Phase 2: remainder is positional content
-    remaining = tokens[i:]
-    if remaining:
-        if pos_opt is None:
-            return None, f"unexpected argument '{remaining[0]}'"
-        args[pos_opt.key] = " ".join(remaining)
-    elif pos_opt is not None:
-        args[pos_opt.key] = ""
-
-    # Phase 3: validate required positional, fill named defaults, type-cast named args
-    if pos_opt is not None and pos_opt.required and not args[pos_opt.key].strip():
-        return None, f"<{pos_opt.key}> is required"
-
-    for key, opt in named.items():
-        if key in args:
+    # validate and fill defaults
+    for opt in schema:
+        if opt.key not in args:
+            if opt.required and opt.default is None:
+                label = f"<{opt.key}>" if opt.positional else f"--{opt.key}"
+                return None, f"{label} is required"
+            args[opt.key] = opt.default
             continue
-        if opt.required:
-            return None, f"--{key}=<value> is required"
-        args[key] = opt.default
 
-    for key, val in list(args.items()):
-        if val is True:
-            continue  # already validated as Boolean in phase 1
-        opt = named.get(key)
-        if opt is None or opt.positional:
-            continue
-        try:
-            args[key] = opt.type.cast(val)
-        except (ValueError, TypeError):
-            return None, f"--{key} expects {opt.type.label}"
+        val = args[opt.key]
+        if val is True and opt.type is not OptionType.Boolean:
+            return None, f"--{opt.key} expects {opt.type.label}"
+
+        if not isinstance(val, bool):
+            try:
+                args[opt.key] = opt.type.validate(str(val))
+            except (ValueError, TypeError):
+                label = f"<{opt.key}>" if opt.positional else f"--{opt.key}"
+                return None, f"{label} expects {opt.type.label}"
 
     return args, None
 
@@ -125,7 +118,7 @@ def build_help(entry: CommandEntry) -> str:
         return " (required)" if opt.required else ""
 
     def _flag_sig(opt: CommandOption) -> str:
-        typ_str = f"=<{opt.type.label}>" if opt.type is not CommandType.Boolean else ""
+        typ_str = f"=<{opt.type.label}>" if opt.type is not OptionType.Boolean else ""
         return f"--{opt.key}{typ_str}"
 
     rows: list[tuple[str, str]] = []
@@ -165,7 +158,7 @@ class CommandHandler:
 
     def _register_help(self):
         async def help_cmd(ctx: ThingContext, args: dict[str, Any]):
-            cmd_name = (args.get("command") or "").strip()
+            cmd_name = args.get("command")
             if cmd_name:
                 entry = self._commands.get(cmd_name)
                 if entry is None or entry.owner == "system":
@@ -173,12 +166,9 @@ class CommandHandler:
                 else:
                     await ctx.message.reply(content=f"```\n{build_help(entry)}\n```")
                 return
-            embed = ui.help_list()
-            for e in self.get_all():
-                embed.add_field(
-                    name=format_signature(e), value=e.description, inline=False
-                )
-            await ctx.message.reply(embed=embed)
+            commands = [(format_signature(e), e.description) for e in self.get_all()]
+            embeds = ui.help_list_embeds(commands)
+            await ctx.message.reply(embeds=embeds)
 
         self._commands["help"] = CommandEntry(
             name="help",
@@ -186,12 +176,13 @@ class CommandHandler:
             schema=[
                 CommandOption(
                     key="command",
-                    positional=True,
-                    default="",
                     description="command to look up",
+                    type=OptionType.String,
+                    positional=True,
+                    required=False,
                 )
             ],
-            description="show all commands, or help for a specific command",
+            description="show all commands, or options for a specific command",
             owner="system",
         )
 

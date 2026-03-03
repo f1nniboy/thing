@@ -29,4 +29,4 @@ class AgentState:
 @dataclass
 class AgentResult:
     summary: str
-    name: str
+    name: str | None

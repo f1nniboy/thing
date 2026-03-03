@@ -3,9 +3,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from utils.paths import PROJECT_ROOT
+from config import TRACEBACK_MAX_LEN
 
-_MAX_TB = 3900
+PROJECT_ROOT = Path(__file__).parent.parent
 
 
 def sanitize_tb(text: str) -> str:
@@ -23,6 +23,12 @@ def sanitize_tb(text: str) -> str:
             return f'File "<...>/{"/".join(parts[-2:])}"'
 
     result = re.sub(r'File "([^"]+)"', shorten, text).strip()
-    if len(result) > _MAX_TB:
-        result = "[... truncated]\n" + result[-_MAX_TB:]
+    if len(result) > TRACEBACK_MAX_LEN:
+        result = "[... truncated]\n" + result[-TRACEBACK_MAX_LEN:]
     return result
+
+
+def clean_for_display(text: str, max_len: int = 120) -> str:
+    """Strip formatting, collapse whitespace, and truncate for display."""
+    text = " ".join(text.replace("`", "").replace("*", "").split())
+    return text if len(text) <= max_len else text[:max_len].rstrip() + "…"

@@ -9,6 +9,7 @@ from discord import app_commands
 
 from ai.api import API
 from config import ALLOWED_USERS, DISCORD_TOKEN
+from utils.pip import check_pip
 from dispatch.context import ThingContext
 from dispatch.events import SUPPORTED_EVENTS
 from slash import build_settings_group, build_thing_group
@@ -77,4 +78,5 @@ if __name__ == "__main__":
     discord.utils.setup_logging()
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("ai.agent").setLevel(logging.DEBUG)
+    check_pip()
     Bot().run(DISCORD_TOKEN, log_handler=None)

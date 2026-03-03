@@ -10,7 +10,7 @@ from ai.tools import TOOL_MAP, TOOL_SCHEMAS
 from ai.types import AgentResult, AgentState, DeployResult
 from config import MAX_TOOL_CALLS
 from thing.manager import ThingEntry
-from utils.clean_for_display import clean_for_display
+from utils.common import clean_for_display
 
 if TYPE_CHECKING:
     from thing.manager import ThingManager
@@ -63,7 +63,10 @@ class AgentRunner:
         user_msg = "\n\n".join(parts)
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt()},
+            {
+                "role": "system",
+                "content": build_system_prompt(self._manager),
+            },
             {"role": "user", "content": user_msg},
         ]
         state = AgentState(
@@ -151,7 +154,7 @@ class AgentRunner:
                 if state.done:
                     break
 
-        if not (state.deploy and state.deploy.name):
-            raise RuntimeError("state.deploy.name must be set as state.done is True")
-
-        return AgentResult(summary=state.summary, name=state.deploy.name)
+        return AgentResult(
+            summary=state.summary,
+            name=state.deploy.name if state.deploy else None,
+        )

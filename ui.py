@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, ClassVar
+from typing import Any
 
 import discord
 
 from ai.types import AgentResult
+from config import PROGRESS_INTERVAL, PROGRESS_MAX_DISPLAY
 from dispatch.commands import CommandHandler
 from dispatch.events import EventBroker
-from thing.config import ConfigOption
-from utils.sanitize_tb import sanitize_tb
+from thing.manager import ThingEntry
+from utils.common import sanitize_tb
+from utils.option import ConfigOption
 
 
 class ProgressLog:
-    INTERVAL: ClassVar[float] = 5.0
-    MAX_DISPLAY: ClassVar[int] = 5
-
     def __init__(self, msg: discord.Message, embed: discord.Embed):
         self._msg: discord.Message = msg
         self._embed: discord.Embed = embed
@@ -28,15 +27,15 @@ class ProgressLog:
             return ""
         visible = (
             self._lines
-            if len(self._lines) <= self.MAX_DISPLAY
-            else ["..."] + self._lines[-(self.MAX_DISPLAY - 1) :]
+            if len(self._lines) <= PROGRESS_MAX_DISPLAY
+            else ["..."] + self._lines[-(PROGRESS_MAX_DISPLAY - 1) :]
         )
         return "\n".join(f"> {l}" for l in visible)
 
     async def _ticker(self):
         try:
             while True:
-                await asyncio.sleep(self.INTERVAL)
+                await asyncio.sleep(PROGRESS_INTERVAL)
                 if self._dirty:
                     self._embed.description = self._render()
                     await self._msg.edit(embed=self._embed)
@@ -68,6 +67,14 @@ def agent_failed(name: str | None, exc: BaseException) -> discord.Embed:
     )
 
 
+def agent_refused(name: str | None, reason: str) -> discord.Embed:
+    return discord.Embed(
+        color=discord.Color.brand_red(),
+        title=f"😔 refused to {f'work on `{name}`' if name else 'create'}",
+        description=reason,
+    )
+
+
 def thing_removed(name: str) -> discord.Embed:
     return discord.Embed(
         color=discord.Color.dark_embed(), description=f"🗑️ removed `{name}`"
@@ -94,8 +101,30 @@ def command_not_found() -> discord.Embed:
     )
 
 
-def help_list() -> discord.Embed:
-    return discord.Embed(color=discord.Color.dark_embed(), title="commands")
+def help_list_embeds(commands: list[tuple[str, str]]) -> list[discord.Embed]:
+    """Split commands into multiple embeds (max 25 fields per embed, max 10 embeds)."""
+    if not commands:
+        return [
+            discord.Embed(
+                color=discord.Color.dark_embed(), description="no commands available"
+            )
+        ]
+
+    embeds = []
+    MAX_FIELDS = 25
+
+    for i in range(0, len(commands), MAX_FIELDS):
+        chunk = commands[i : i + MAX_FIELDS]
+        # First embed gets title, others don't
+        title = "commands" if i == 0 else None
+        embed = discord.Embed(color=discord.Color.dark_embed(), title=title)
+
+        for sig, desc in chunk:
+            embed.add_field(name=sig, value=desc, inline=False)
+
+        embeds.append(embed)
+
+    return embeds[:10]  # Discord limit: max 10 embeds per message
 
 
 def command_timed_out() -> discord.Embed:
@@ -139,12 +168,13 @@ def overview_list_embed(names: list[str]) -> discord.Embed:
 
 def thing_fields(
     embed: discord.Embed,
-    name: str,
+    entry: ThingEntry,
     command_handler: CommandHandler,
     event_broker: EventBroker,
 ):
-    commands = [e for e in command_handler.get_all() if e.owner == name]
-    events = event_broker.get_for_owner(name)
+    commands = [e for e in command_handler.get_all() if e.owner == entry.name]
+    events = event_broker.get_for_owner(entry.name)
+    config_options = entry.instance.config.options
     if commands:
         embed.add_field(
             name="📟 commands",
@@ -157,29 +187,38 @@ def thing_fields(
             value="\n".join(f"`{h.func_name}` → `{h.event_name}`" for h in events),
             inline=False,
         )
+    if config_options:
+        embed.add_field(
+            name="⚙️ settings",
+            value="\n".join(
+                f"`{o.key}` → {o.description}" for o in config_options.values()
+            ),
+            inline=False,
+        )
 
 
 def thing_summary_embed(
     result: AgentResult,
+    entry: ThingEntry,
     command_handler: CommandHandler,
     event_broker: EventBroker,
 ) -> discord.Embed:
     embed = discord.Embed(
         color=discord.Color.brand_green(),
-        title=f"✅ `{result.name}`",
+        title=f"✅ `{entry.name}`",
         description=result.summary or None,
     )
-    thing_fields(embed, result.name, command_handler, event_broker)
+    thing_fields(embed, entry, command_handler, event_broker)
     return embed
 
 
 def thing_detail_embed(
-    name: str,
+    entry: ThingEntry,
     command_handler: CommandHandler,
     event_broker: EventBroker,
 ) -> discord.Embed:
-    embed = discord.Embed(color=discord.Color.dark_embed(), title=f"🔧 `{name}`")
-    thing_fields(embed, name, command_handler, event_broker)
+    embed = discord.Embed(color=discord.Color.dark_embed(), title=f"🔧 `{entry.name}`")
+    thing_fields(embed, entry, command_handler, event_broker)
     return embed
 
 
@@ -188,14 +227,22 @@ def settings_error(message: str) -> discord.Embed:
 
 
 def settings_updated(
-    thing_name: str, key: str, humanized: str, reset: bool
+    thing_name: str, key: str, humanized: str | None, reset: bool
 ) -> discord.Embed:
     if reset:
         color = discord.Color.blurple()
-        desc = f"🔄 **{thing_name}.{key}** reset to {humanized}"
+        desc = (
+            f"🔄 **{thing_name}.{key}** reset"
+            if humanized is None
+            else f"🔄 **{thing_name}.{key}** reset to {humanized}"
+        )
     else:
         color = discord.Color.brand_green()
-        desc = f"✅ **{thing_name}.{key}** set to {humanized}"
+        desc = (
+            f"✅ **{thing_name}.{key}** set"
+            if humanized is None
+            else f"✅ **{thing_name}.{key}** set to {humanized}"
+        )
     return discord.Embed(color=color, description=desc)
 
 
@@ -216,7 +263,10 @@ def settings_show_embed(entries: list[tuple[str, ConfigOption, Any]]) -> discord
     for thing_name, opts in by_thing.items():
         lines = []
         for option, current in opts:
-            lines.append(f"> **{option.description}**: {option.type.humanize(current)}")
+            humanized = option.type.humanize(current)
+            lines.append(
+                f"> **{option.description}**: {humanized if humanized is not None else '*(none)*'}"
+            )
         embed.add_field(name=f"**{thing_name}**", value="\n".join(lines), inline=False)
 
     return embed

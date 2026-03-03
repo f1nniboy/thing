@@ -16,18 +16,19 @@ from config import CONFIG_DIR, DB_DIR, THING_ERROR_HISTORY, THINGS_DIR
 from dispatch.commands import CommandHandler
 from dispatch.context import ThingContext
 from dispatch.events import EventBroker
-from thing.base import CommandOption, CommandType, Thing, ThingServices, command, event
-from thing.config import ConfigOption, ConfigType, ThingConfig
+from thing.base import Thing, ThingServices, command, event
+from thing.config import ThingConfig
 from thing.db import DB
 from thing.loader import (
     ThingInfo,
     extract_thing_info,
     load_module,
-    pip_install,
     register_module,
     unregister_module,
 )
-from utils.sanitize_tb import sanitize_tb
+from utils.common import sanitize_tb
+from utils.option import CommandOption, ConfigOption, OptionType
+from utils.pip import pip_install
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class ThingManager:
         self.bot = bot
         self.ai = ai
         _injected = [
+            discord,
             Thing,
             DB,
             command,
@@ -69,16 +71,18 @@ class ThingManager:
             WebSearchResult,
             WebFetchResult,
             API,
-            discord,
             ConfigOption,
-            ConfigType,
+            OptionType,
             CommandOption,
-            CommandType,
         ]
         self._INJECTED: dict[str, Any] = {obj.__name__: obj for obj in _injected}
         self.command_handler = CommandHandler(self)
         self.event_broker = EventBroker(self)
         self._things: dict[str, ThingEntry] = {}
+
+    @property
+    def injected_names(self) -> list[str]:
+        return list(self._INJECTED.keys())
 
     def _cleanup(self, name: str):
         self.command_handler.unregister_owner(name)

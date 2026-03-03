@@ -2,73 +2,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from enum import Enum
-from typing import Any, override
+from typing import Any
 
 import discord
 
 from ai.api import API
-from thing.config import ConfigOption, ThingConfig
+from thing.config import ThingConfig
 from thing.db import DB
-
-
-class _CmdHandler:
-    @classmethod
-    def cast(cls, value_str: str) -> Any:
-        return value_str
-
-
-class _CmdIntegerHandler(_CmdHandler):
-    @override
-    @classmethod
-    def cast(cls, value_str: str) -> Any:
-        return int(value_str)
-
-
-class _CmdFloatHandler(_CmdHandler):
-    @override
-    @classmethod
-    def cast(cls, value_str: str) -> Any:
-        return float(value_str)
-
-
-class _CmdBooleanHandler(_CmdHandler):
-    @override
-    @classmethod
-    def cast(cls, value_str: str) -> Any:
-        if value_str.lower() in ("yes", "true", "1"):
-            return True
-        if value_str.lower() in ("no", "false", "0"):
-            return False
-        raise ValueError(f"invalid boolean value: {value_str!r}")
-
-
-class CommandType(Enum):
-    String = _CmdHandler
-    Integer = _CmdIntegerHandler
-    Float = _CmdFloatHandler
-    Boolean = _CmdBooleanHandler
-
-    def cast(self, value_str: str) -> Any:
-        return self.value.cast(value_str)
-
-    @property
-    def label(self) -> str:
-        return self.name.lower()
-
-
-@dataclass
-class CommandOption:
-    key: str
-    type: CommandType = CommandType.String
-    required: bool = True
-    default: Any = None
-    positional: bool = False
-    description: str = ""
-
-    def __post_init__(self) -> None:
-        if self.default is not None:
-            self.required = False
+from utils.option import CommandOption, ConfigOption
 
 
 def command(
@@ -84,7 +25,8 @@ def command(
     Use of="parent" to register as a subcommand. Don't add a handler for the
     base command if you use subcommands.
 
-    schema is a list of CommandOption. Positional captures all non-flag tokens.
+    schema is a list of CommandOption. Positional captures all non-flag tokens,
+    but still require a type.
     Named args use --key=value. Boolean flags may be bare: --verbose.
     Required options have no default. Types: String, Integer, Float, Boolean.
 
@@ -96,9 +38,9 @@ def command(
             name="download",
             description="Download a YouTube video",
             schema=[
-                CommandOption(key="url", positional=True, description="YouTube URL"),
-                CommandOption(key="fmt", type=CommandType.String, default="mp3", description="mp3 or mp4"),
-                CommandOption(key="verbose", type=CommandType.Boolean, default=False, description="verbose output"),
+                CommandOption(key="url", type=OptionType.String, positional=True, description="YouTube URL"),
+                CommandOption(key="fmt", type=OptionType.String, default="mp3", description="mp3 or mp4"),
+                CommandOption(key="verbose", type=OptionType.Boolean, default=False, description="verbose output"),
             ],
         )
         async def download(self, ctx, args: dict):

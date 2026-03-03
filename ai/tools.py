@@ -7,8 +7,10 @@ from urllib.parse import urlparse
 import aiohttp
 
 from ai.types import AgentState
-from config import FETCH_MAX_CHARS, OLLAMA_API_KEY
+from config import FETCH_MAX_CHARS, OLLAMA_API_KEY, USER_AGENT
 from utils.replace import replace
+
+_NO_FILE = "error: no file written yet - call write_file first"
 
 
 class Tool:
@@ -81,7 +83,7 @@ class PatchFileTool(Tool):
     @override
     async def execute(self, args: dict[str, Any], state: AgentState) -> str:
         if state.content is None:
-            return "error: no file written yet - call write_file first"
+            return _NO_FILE
         search = args.get("search", "")
         replace_text = args.get("replace", "")
         result = replace(state.content, search, replace_text)
@@ -103,7 +105,7 @@ class ReadFileTool(Tool):
     @override
     async def execute(self, args: dict[str, Any], state: AgentState) -> str:
         if state.content is None:
-            return "no file written yet"
+            return _NO_FILE
         return f"```python\n{state.content}\n```"
 
 
@@ -115,10 +117,7 @@ class FetchTool(Tool):
     )
     params: ClassVar[dict[str, str]] = {"url": "The URL to fetch."}
 
-    _HEADERS = {
-        # https://www.useragents.me
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.3"
-    }
+    _HEADERS = {"User-Agent": USER_AGENT}
 
     @override
     async def execute(self, args: dict[str, Any], state: AgentState) -> str:
@@ -166,7 +165,7 @@ class GrepTool(Tool):
     @override
     async def execute(self, args: dict[str, Any], state: AgentState) -> str:
         if state.content is None:
-            return "error: no file written yet"
+            return _NO_FILE
         pattern = args.get("pattern", "")
         if not pattern:
             return "error: pattern is required"
@@ -231,7 +230,7 @@ class WebSearchTool(Tool):
     def format_progress(
         self, args: dict[str, Any], result: str, state: AgentState
     ) -> str | None:
-        return f"🔍 `web_search` {args.get('query', '')!r}"
+        return f"🔍 searched `{args.get('query', '')!r}`"
 
 
 @final
@@ -282,7 +281,7 @@ class DeployTool(Tool):
     @override
     async def execute(self, args: dict[str, Any], state: AgentState) -> str:
         if state.content is None:
-            return "error: no file written yet - call write_file first"
+            return _NO_FILE
         result = await state.deploy_cb(state.content)
         if result.name:
             state.deploy = result
@@ -297,6 +296,31 @@ class DeployTool(Tool):
         if state.deploy:
             return f"✅ `{state.deploy.name}`"
         return "❌ deploy failed"
+
+
+@final
+class FailTool(Tool):
+    name: ClassVar[str] = "fail"
+    description: ClassVar[str] = (
+        "Refuse the request or abort if the task cannot be completed. "
+        "Use when the request is impossible, out of scope, or requires dependencies "
+        "that cannot be installed. Do not use this as a fallback for fixable errors."
+    )
+    params: ClassVar[dict[str, str]] = {
+        "reason": "Clear explanation of why the task cannot be completed."
+    }
+
+    @override
+    async def execute(self, args: dict[str, Any], state: AgentState) -> str:
+        state.done = True
+        state.summary = args.get("reason") or "The agent refused the request."
+        return "acknowledged"
+
+    @override
+    def format_progress(
+        self, _args: dict[str, Any], _result: str, _state: AgentState
+    ) -> str | None:
+        return None
 
 
 @final
@@ -332,6 +356,7 @@ TOOLS: list[Tool] = [
     FetchTool(),
     DeployTool(),
     DoneTool(),
+    FailTool(),
     *(([WebSearchTool(), WebFetchTool()]) if OLLAMA_API_KEY else []),
 ]
 
