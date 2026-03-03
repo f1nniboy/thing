@@ -52,27 +52,37 @@ def format_signature(entry: CommandEntry) -> str:
 def parse_args(
     tokens: list[str], schema: list[CommandOption]
 ) -> tuple[dict[str, Any] | None, str | None]:
-    content_parts: list[str] = []
     args: dict[str, Any] = {}
     named = {o.key: o for o in schema if not o.positional}
     pos_opt = next((o for o in schema if o.positional), None)
 
-    for tok in tokens:
-        if tok.startswith("--"):
-            part = tok[2:]
-            if "=" in part:
-                key, val = part.split("=", 1)
-            else:
-                key, val = part, True  # bare flag
-            args[key] = val
+    # Phase 1: greedily consume leading --flags
+    i = 0
+    while i < len(tokens) and tokens[i].startswith("--"):
+        part = tokens[i][2:]
+        if "=" in part:
+            key, val = part.split("=", 1)
         else:
-            content_parts.append(tok)
+            key, val = part, True  # bare flag
+        if key not in named:
+            return None, f"unknown option --{key}"
+        if val is True and named[key].type is not CommandType.Boolean:
+            return None, f"--{key} is a flag but expects {named[key].type.label}"
+        args[key] = val
+        i += 1
 
-    if pos_opt is not None:
-        positional = " ".join(content_parts)
-        if pos_opt.required and not positional.strip():
-            return None, f"<{pos_opt.key}> is required"
-        args[pos_opt.key] = positional
+    # Phase 2: remainder is positional content
+    remaining = tokens[i:]
+    if remaining:
+        if pos_opt is None:
+            return None, f"unexpected argument '{remaining[0]}'"
+        args[pos_opt.key] = " ".join(remaining)
+    elif pos_opt is not None:
+        args[pos_opt.key] = ""
+
+    # Phase 3: validate required positional, fill named defaults, type-cast named args
+    if pos_opt is not None and pos_opt.required and not args[pos_opt.key].strip():
+        return None, f"<{pos_opt.key}> is required"
 
     for key, opt in named.items():
         if key in args:
@@ -83,10 +93,7 @@ def parse_args(
 
     for key, val in list(args.items()):
         if val is True:
-            opt = named.get(key)
-            if opt is not None and opt.type is not CommandType.Boolean:
-                return None, f"--{key} is a flag but expects {opt.type.label}"
-            continue
+            continue  # already validated as Boolean in phase 1
         opt = named.get(key)
         if opt is None or opt.positional:
             continue
