@@ -28,6 +28,13 @@ def extract_thing_info(code: str) -> ThingInfo:
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
+        has_thing_base = any(
+            (isinstance(b, ast.Name) and b.id == "Thing")
+            or (isinstance(b, ast.Attribute) and b.attr == "Thing")
+            for b in node.bases
+        )
+        if not has_thing_base:
+            continue
         for item in node.body:
             if isinstance(item, ast.Assign):
                 targets = [t for t in item.targets if isinstance(t, ast.Name)]

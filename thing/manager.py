@@ -12,11 +12,12 @@ import aiofiles
 import discord
 
 from ai.api import API, GenerateOptions, WebFetchResult, WebSearchResult
-from config import DB_DIR, THING_ERROR_HISTORY, THINGS_DIR
+from config import CONFIG_DIR, DB_DIR, THING_ERROR_HISTORY, THINGS_DIR
 from dispatch.commands import CommandHandler
 from dispatch.context import ThingContext
 from dispatch.events import EventBroker
-from thing.base import Thing, ThingServices, command, event
+from thing.base import CommandOption, CommandType, Thing, ThingServices, command, event
+from thing.config import ConfigOption, ConfigType, ThingConfig
 from thing.db import DB
 from thing.loader import (
     ThingInfo,
@@ -58,18 +59,23 @@ class ThingManager:
     def __init__(self, bot: discord.Client, ai: API):
         self.bot = bot
         self.ai = ai
-        self._INJECTED: dict[str, Any] = {
-            "Thing": Thing,
-            "DB": DB,
-            "command": command,
-            "event": event,
-            "ThingContext": ThingContext,
-            "GenerateOptions": GenerateOptions,
-            "WebSearchResult": WebSearchResult,
-            "WebFetchResult": WebFetchResult,
-            "API": API,
-            "discord": discord,
-        }
+        _injected = [
+            Thing,
+            DB,
+            command,
+            event,
+            ThingContext,
+            GenerateOptions,
+            WebSearchResult,
+            WebFetchResult,
+            API,
+            discord,
+            ConfigOption,
+            ConfigType,
+            CommandOption,
+            CommandType,
+        ]
+        self._INJECTED: dict[str, Any] = {obj.__name__: obj for obj in _injected}
         self.command_handler = CommandHandler(self)
         self.event_broker = EventBroker(self)
         self._things: dict[str, ThingEntry] = {}
@@ -101,18 +107,27 @@ class ThingManager:
         name = info.name
         register_module(module, name)
         try:
-            instance = thing_class(ThingServices(bot=self.bot, db=DB(name), ai=self.ai))
+            cfg = ThingConfig(name, thing_class.CONFIG)
+            db = DB(name)
+
+            await cfg.load()
+            instance = thing_class(
+                ThingServices(bot=self.bot, db=db, ai=self.ai, config=cfg)
+            )
+
             self._register_handlers(instance, name)
             await instance.setup()
+
+            path = os.path.join(THINGS_DIR, f"{name}.py")
+            async with aiofiles.open(path, "w", encoding="utf-8") as f:
+                await f.write(info.source)
+
             self._things[name] = ThingEntry(
                 name=name, info=info, instance=instance, module=module
             )
         except Exception:
             self._cleanup(name)
             raise
-        path = os.path.join(THINGS_DIR, f"{name}.py")
-        async with aiofiles.open(path, "w", encoding="utf-8") as f:
-            await f.write(info.source)
         logger.info("loaded thing '%s'", name)
         return instance
 
@@ -126,6 +141,7 @@ class ThingManager:
                     fn._cmd_schema,
                     fn._cmd_desc,
                     owner=name,
+                    of=fn._cmd_of,
                 )
             elif kind == "event":
                 self.event_broker.register(
@@ -149,6 +165,7 @@ class ThingManager:
         for path in [
             os.path.join(THINGS_DIR, f"{name}.py"),
             os.path.join(DB_DIR, f"{name}.json"),
+            os.path.join(CONFIG_DIR, f"{name}.json"),
         ]:
             if os.path.exists(path):
                 os.remove(path)
@@ -178,6 +195,10 @@ class ThingManager:
     def get(self, name: str) -> ThingEntry | None:
         return self._things.get(name)
 
+    def get_config(self, name: str) -> ThingConfig | None:
+        entry = self._things.get(name)
+        return entry.instance.config if entry else None
+
     def names(self) -> list[str]:
         return list(self._things.keys())
 
@@ -194,18 +215,14 @@ class ThingManager:
 
     @staticmethod
     def _find_thing_class(module: Any) -> type[Thing] | None:
-        candidates = []
-        for attr in vars(module).values():
-            try:
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, Thing)
-                    and attr is not Thing
-                ):
-                    candidates.append(attr)
-            except TypeError:
-                continue
-        if not candidates:
-            return None
+        candidates = [
+            attr
+            for attr in vars(module).values()
+            if isinstance(attr, type) and issubclass(attr, Thing) and attr is not Thing
+        ]
         direct = [c for c in candidates if c.__mro__[1] is Thing]
-        return direct[0] if direct else candidates[0]
+        if len(direct) > 1:
+            logger.warning(
+                "multiple direct Thing subclasses found, using first: %s", direct
+            )
+        return next(iter(direct or candidates), None)

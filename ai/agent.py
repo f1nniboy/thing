@@ -105,6 +105,11 @@ class AgentRunner:
             )
 
             if not tool_calls:
+                state.no_tool_call_count += 1
+                if state.no_tool_call_count >= 3:
+                    raise RuntimeError(
+                        "agent returned text without tool calls 3 times in a row"
+                    )
                 logger.warning("agent returned text without tool call")
                 messages.append(
                     {
@@ -122,6 +127,8 @@ class AgentRunner:
                     else {}
                 )
                 tool = TOOL_MAP.get(tool_name)
+                state.tool_call_count += 1
+                state.no_tool_call_count = 0
 
                 if tool is None:
                     messages.append(
@@ -131,8 +138,6 @@ class AgentRunner:
                         }
                     )
                     continue
-
-                state.tool_call_count += 1
                 logger.debug("tool call: %s -> %s", tool_name, tool_args)
                 result = await tool.execute(tool_args, state)
                 logger.debug("tool result: %s -> %s", tool_name, result)

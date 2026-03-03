@@ -2,55 +2,118 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from enum import Enum
+from typing import Any, override
 
 import discord
 
 from ai.api import API
+from thing.config import ConfigOption, ThingConfig
 from thing.db import DB
 
 
+class _CmdHandler:
+    @classmethod
+    def cast(cls, value_str: str) -> Any:
+        return value_str
+
+
+class _CmdIntegerHandler(_CmdHandler):
+    @override
+    @classmethod
+    def cast(cls, value_str: str) -> Any:
+        return int(value_str)
+
+
+class _CmdFloatHandler(_CmdHandler):
+    @override
+    @classmethod
+    def cast(cls, value_str: str) -> Any:
+        return float(value_str)
+
+
+class _CmdBooleanHandler(_CmdHandler):
+    @override
+    @classmethod
+    def cast(cls, value_str: str) -> Any:
+        if value_str.lower() in ("yes", "true", "1"):
+            return True
+        if value_str.lower() in ("no", "false", "0"):
+            return False
+        raise ValueError(f"invalid boolean value: {value_str!r}")
+
+
+class CommandType(Enum):
+    String = _CmdHandler
+    Integer = _CmdIntegerHandler
+    Float = _CmdFloatHandler
+    Boolean = _CmdBooleanHandler
+
+    def cast(self, value_str: str) -> Any:
+        return self.value.cast(value_str)
+
+    @property
+    def label(self) -> str:
+        return self.name.lower()
+
+
+@dataclass
+class CommandOption:
+    key: str
+    type: CommandType = CommandType.String
+    required: bool = True
+    default: Any = None
+    positional: bool = False
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if self.default is not None:
+            self.required = False
+
+
 def command(
-    schema: dict[str, Any] | None = None,
+    schema: list[CommandOption] | None = None,
     description: str = "",
     name: str | None = None,
+    of: str | None = None,
 ):
     r"""
     Decorator to register a method as a prefix command.
 
     The command name defaults to the method name. Override with name="...".
+    Use of="parent" to register as a subcommand. Don't add a handler for the
+    base command if you use subcommands.
 
-    schema format:
-    {
-        "text":    {"positional": True, "required": True,  "description": "the input"},
-        "to":      {"type": str,  "required": True,  "description": "target lang"},
-        "from":    {"type": str,  "default": "auto", "required": False, "description": "source lang"},
-        "verbose": {"type": bool, "default": False,  "required": False, "description": "verbose mode"},
-    }
-    Flags use --key=value format. Bool flags are bare: --verbose.
-    One arg may have "positional": True - it captures all non-flag tokens.
+    schema is a list of CommandOption. Positional captures all non-flag tokens.
+    Named args use --key=value. Boolean flags may be bare: --verbose.
+    Required options have no default. Types: String, Integer, Float, Boolean.
 
     Example:
+        @command(of="soko", name="play", description="Start a new game")
+        async def soko_play(self, ctx, args): ...     # $soko play
+
         @command(
-            name="roll",
-            description="Roll dice, e.g. 2d6",
-            schema={"dice": {"positional": True, "required": True, "description": "dice notation e.g. 2d6"}},
+            name="download",
+            description="Download a YouTube video",
+            schema=[
+                CommandOption(key="url", positional=True, description="YouTube URL"),
+                CommandOption(key="fmt", type=CommandType.String, default="mp3", description="mp3 or mp4"),
+                CommandOption(key="verbose", type=CommandType.Boolean, default=False, description="verbose output"),
+            ],
         )
-        async def roll(self, ctx, args: dict):
-            import random, re
-            m = re.match(r'(\d+)d(\d+)', args["dice"])
-            if not m:
-                return await ctx.message.reply(content="usage: 2d6")
-            n, sides = int(m.group(1)), int(m.group(2))
-            results = [random.randint(1, sides) for _ in range(n)]
-            await ctx.message.reply(content=f"🎲 {results} = **{sum(results)}**")
+        async def download(self, ctx, args: dict):
+            url = args["url"]       # required positional string
+            fmt = args["fmt"]       # "mp3" if omitted
+            count = args["count"]   # 1 if omitted (already cast to int)
+            verbose = args["verbose"]  # False if omitted, True if --verbose bare flag
     """
 
     def decorator(fn: Any) -> Any:
         fn._thing_type = "command"
         fn._cmd_name = name
-        fn._cmd_schema = schema or {}
+        fn._cmd_schema = schema or []
         fn._cmd_desc = description
+        fn._cmd_of = of
         return fn
 
     return decorator
@@ -84,6 +147,7 @@ class ThingServices:
     bot: discord.Client
     db: DB
     ai: API
+    config: ThingConfig
 
 
 class Thing:
@@ -99,16 +163,19 @@ class Thing:
         self.bot    - discord.Client instance
         self.db     - DB persistent key-value store
         self.ai     - AI API instance
+        self.config - ThingConfig for reading declared CONFIG options
         self.logger - logging.Logger for this Thing
     """
 
     NAME: str = "unnamed"
     REQUIREMENTS: list[str] = []
+    CONFIG: list[ConfigOption] = []
 
     def __init__(self, services: ThingServices):
         self.bot: discord.Client = services.bot
         self.db: DB = services.db
         self.ai: API = services.ai
+        self.config: ThingConfig = services.config
         self.logger: logging.Logger = logging.getLogger(f"thing.{self.NAME}")
         self.logger.setLevel(logging.DEBUG)
 

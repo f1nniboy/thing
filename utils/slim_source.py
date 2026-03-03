@@ -57,6 +57,9 @@ def slim_source(source: str) -> str:
     ) -> None:
         for dec in node.decorator_list:
             emit_lines(dec.lineno, dec.end_lineno, out)
+        if node.name == "__init__":
+            emit_lines(node.lineno, node.end_lineno, out)
+            return
         emit_lines(node.lineno, node.body[0].lineno - 1, out)
         if is_docstring(node.body[0]):
             emit_lines(node.body[0].lineno, node.body[0].end_lineno, out)

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import discord
 
 from ai.types import AgentResult
-
 from dispatch.commands import CommandHandler
 from dispatch.events import EventBroker
+from thing.config import ConfigOption
 from utils.sanitize_tb import sanitize_tb
 
 
@@ -148,7 +148,7 @@ def thing_fields(
     if commands:
         embed.add_field(
             name="📟 commands",
-            value="\n".join(f"`{e.name}` → {e.description}" for e in commands),
+            value="\n".join(f"`{e.full_name}` → {e.description}" for e in commands),
             inline=False,
         )
     if events:
@@ -180,4 +180,43 @@ def thing_detail_embed(
 ) -> discord.Embed:
     embed = discord.Embed(color=discord.Color.dark_embed(), title=f"🔧 `{name}`")
     thing_fields(embed, name, command_handler, event_broker)
+    return embed
+
+
+def settings_error(message: str) -> discord.Embed:
+    return discord.Embed(color=discord.Color.brand_red(), description=f"{message} ❌")
+
+
+def settings_updated(
+    thing_name: str, key: str, humanized: str, reset: bool
+) -> discord.Embed:
+    if reset:
+        color = discord.Color.blurple()
+        desc = f"🔄 **{thing_name}.{key}** reset to {humanized}"
+    else:
+        color = discord.Color.brand_green()
+        desc = f"✅ **{thing_name}.{key}** set to {humanized}"
+    return discord.Embed(color=color, description=desc)
+
+
+def settings_show_embed(entries: list[tuple[str, ConfigOption, Any]]) -> discord.Embed:
+    if not entries:
+        return discord.Embed(
+            color=discord.Color.dark_embed(),
+            description="no configurable options 😔",
+        )
+
+    embed = discord.Embed(color=discord.Color.dark_embed(), title="⚙️ settings")
+
+    # Group by thing name
+    by_thing: dict[str, list[tuple[ConfigOption, Any]]] = {}
+    for thing_name, option, current in entries:
+        by_thing.setdefault(thing_name, []).append((option, current))
+
+    for thing_name, opts in by_thing.items():
+        lines = []
+        for option, current in opts:
+            lines.append(f"> **{option.description}**: {option.type.humanize(current)}")
+        embed.add_field(name=f"**{thing_name}**", value="\n".join(lines), inline=False)
+
     return embed

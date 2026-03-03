@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import ui
 from config import COMMAND_PREFIX, HANDLER_TIMEOUT
 from dispatch.context import ThingContext
+from thing.base import CommandOption, CommandType
 from utils.sanitize_tb import sanitize_tb
 
 if TYPE_CHECKING:
@@ -23,41 +24,38 @@ logger = logging.getLogger(__name__)
 class CommandEntry:
     name: str
     callback: Callable[..., Any]
-    schema: dict[str, Any]
+    schema: list[CommandOption]
     description: str
     owner: str
+    of: str | None = None
 
-
-def _positional_key(schema: dict[str, Any]) -> str | None:
-    for key, spec in schema.items():
-        if spec.get("positional"):
-            return key
-    return None
+    @property
+    def full_name(self) -> str:
+        return f"{self.of} {self.name}" if self.of else self.name
 
 
 def format_signature(entry: CommandEntry) -> str:
-    parts = [entry.name]
-    pos_key = _positional_key(entry.schema)
-    if pos_key:
-        spec = entry.schema[pos_key]
-        parts.append(f"<{pos_key}>" if spec.get("required") else f"[<{pos_key}>]")
-    for key, spec in entry.schema.items():
-        if spec.get("positional"):
+    parts = [entry.full_name]
+    pos_opt = next((o for o in entry.schema if o.positional), None)
+    if pos_opt:
+        parts.append(f"<{pos_opt.key}>" if pos_opt.required else f"[<{pos_opt.key}>]")
+    for opt in entry.schema:
+        if opt.positional:
             continue
-        typ = spec.get("type", bool)
-        typ_str = f"=<{typ.__name__}>" if typ is not bool else ""
+        typ_str = f"=<{opt.type.label}>" if opt.type is not CommandType.Boolean else ""
         parts.append(
-            f"--{key}{typ_str}" if spec.get("required") else f"[--{key}{typ_str}]"
+            f"--{opt.key}{typ_str}" if opt.required else f"[--{opt.key}{typ_str}]"
         )
     return " ".join(parts)
 
 
 def parse_args(
-    tokens: list[str], schema: dict[str, Any]
+    tokens: list[str], schema: list[CommandOption]
 ) -> tuple[dict[str, Any] | None, str | None]:
     content_parts: list[str] = []
     args: dict[str, Any] = {}
-    pos_key = _positional_key(schema)
+    named = {o.key: o for o in schema if not o.positional}
+    pos_opt = next((o for o in schema if o.positional), None)
 
     for tok in tokens:
         if tok.startswith("--"):
@@ -65,76 +63,79 @@ def parse_args(
             if "=" in part:
                 key, val = part.split("=", 1)
             else:
-                key, val = part, True  # bare flag - bool
+                key, val = part, True  # bare flag
             args[key] = val
         else:
             content_parts.append(tok)
 
-    if pos_key is not None:
+    if pos_opt is not None:
         positional = " ".join(content_parts)
-        if schema[pos_key].get("required") and not positional.strip():
-            return None, f"<{pos_key}> is required"
-        args[pos_key] = positional
-    # non-flag, non-positional tokens are silently ignored (unknown input)
+        if pos_opt.required and not positional.strip():
+            return None, f"<{pos_opt.key}> is required"
+        args[pos_opt.key] = positional
 
-    for key, spec in schema.items():
-        if spec.get("positional") or key in args:
+    for key, opt in named.items():
+        if key in args:
             continue
-        if spec.get("required"):
+        if opt.required:
             return None, f"--{key}=<value> is required"
-        if "default" in spec:
-            args[key] = spec["default"]
+        args[key] = opt.default
 
     for key, val in list(args.items()):
-        spec = schema.get(key, {})
-        if spec.get("positional") or val is True:
+        if val is True:
+            opt = named.get(key)
+            if opt is not None and opt.type is not CommandType.Boolean:
+                return None, f"--{key} is a flag but expects {opt.type.label}"
             continue
-        typ = spec.get("type")
-        if typ and typ is not bool and not isinstance(val, typ):
-            try:
-                args[key] = typ(val)
-            except (ValueError, TypeError):
-                return None, f"--{key} expects {typ.__name__}"
+        opt = named.get(key)
+        if opt is None or opt.positional:
+            continue
+        try:
+            args[key] = opt.type.cast(val)
+        except (ValueError, TypeError):
+            return None, f"--{key} expects {opt.type.label}"
 
     return args, None
 
 
 def build_help(entry: CommandEntry) -> str:
     schema = entry.schema
-    pos_key = _positional_key(schema)
-    pos_part = f" <{pos_key}>" if pos_key else ""
+    pos_opt = next((o for o in schema if o.positional), None)
+    pos_part = f" <{pos_opt.key}>" if pos_opt else ""
     lines = [
-        f"usage: {COMMAND_PREFIX}{entry.name}{pos_part} [options]",
+        f"usage: {COMMAND_PREFIX}{entry.full_name}{pos_part} [options]",
         entry.description,
         "",
     ]
 
-    def _fmt_default(spec: dict[str, Any]) -> str:
-        if "default" not in spec:
+    def _fmt_default(opt: CommandOption) -> str:
+        if opt.required:
             return ""
-        val = spec["default"]
+        val = opt.default
         return f" (default: {val if val != '' and val is not None else '<empty>'})"
 
-    def _flag_sig(key: str, spec: dict[str, Any]) -> str:
-        typ = spec.get("type", bool)
-        typ_str = f"=<{typ.__name__}>" if typ is not bool else ""
-        return f"--{key}{typ_str}"
+    def _fmt_required(opt: CommandOption) -> str:
+        return " (required)" if opt.required else ""
+
+    def _flag_sig(opt: CommandOption) -> str:
+        typ_str = f"=<{opt.type.label}>" if opt.type is not CommandType.Boolean else ""
+        return f"--{opt.key}{typ_str}"
 
     rows: list[tuple[str, str]] = []
-    if pos_key:
-        spec = schema[pos_key]
-        req = " (required)" if spec.get("required") else ""
-        rows.append(
-            (f"<{pos_key}>", f"{spec.get('description', '')}{_fmt_default(spec)}{req}")
-        )
-
-    flag_specs = {k: v for k, v in schema.items() if not v.get("positional")}
-    for key, spec in flag_specs.items():
-        req = " (required)" if spec.get("required") else ""
+    if pos_opt:
         rows.append(
             (
-                _flag_sig(key, spec),
-                f"{spec.get('description', '')}{_fmt_default(spec)}{req}",
+                f"<{pos_opt.key}>",
+                f"{pos_opt.description}{_fmt_default(pos_opt)}{_fmt_required(pos_opt)}",
+            )
+        )
+    for opt in schema:
+        if opt.positional:
+            continue
+        rows.append(
+            (
+                _flag_sig(opt),
+                f"{opt.description}{_fmt_default(opt)}{_fmt_required(opt)}",
             )
         )
 
@@ -165,9 +166,8 @@ class CommandHandler:
                 else:
                     await ctx.message.reply(content=f"```\n{build_help(entry)}\n```")
                 return
-            entries = [e for e in self._commands.values() if e.owner != "system"]
             embed = ui.help_list()
-            for e in entries:
+            for e in self.get_all():
                 embed.add_field(
                     name=format_signature(e), value=e.description, inline=False
                 )
@@ -176,13 +176,14 @@ class CommandHandler:
         self._commands["help"] = CommandEntry(
             name="help",
             callback=help_cmd,
-            schema={
-                "command": {
-                    "positional": True,
-                    "required": False,
-                    "description": "command to look up",
-                }
-            },
+            schema=[
+                CommandOption(
+                    key="command",
+                    positional=True,
+                    default="",
+                    description="command to look up",
+                )
+            ],
             description="show all commands, or help for a specific command",
             owner="system",
         )
@@ -191,16 +192,18 @@ class CommandHandler:
         self,
         name: str,
         callback: Callable[..., Any],
-        schema: dict[str, Any],
+        schema: list[CommandOption],
         description: str,
         owner: str,
+        of: str | None = None,
     ):
-        if name in self._commands:
+        entry = CommandEntry(name, callback, schema, description, owner, of)
+        if entry.full_name in self._commands:
             raise ValueError(
-                f"command '{name}' is already registered by '{self._commands[name].owner}'"
+                f"command '{entry.full_name}' is already registered by '{self._commands[entry.full_name].owner}'"
             )
-        self._commands[name] = CommandEntry(name, callback, schema, description, owner)
-        logger.info("registered command '%s' for '%s'", name, owner)
+        self._commands[entry.full_name] = entry
+        logger.info("registered command '%s' for '%s'", entry.full_name, owner)
 
     def unregister_owner(self, owner: str):
         gone = [n for n, e in self._commands.items() if e.owner == owner]
@@ -225,11 +228,16 @@ class CommandHandler:
             tokens = raw.split()
 
         name = tokens[0].lower()
-        if name not in self._commands:
-            return False
-
-        entry = self._commands[name]
         rest = tokens[1:]
+
+        sub_key = f"{name} {rest[0].lower()}" if rest else None
+        if sub_key and sub_key in self._commands:
+            entry = self._commands[sub_key]
+            rest = rest[1:]
+        elif name in self._commands:
+            entry = self._commands[name]
+        else:
+            return False
 
         if "--help" in rest:
             await ctx.message.reply(content=f"```\n{build_help(entry)}\n```")

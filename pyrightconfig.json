@@ -1,5 +1,5 @@
 {
-  "ignore": ["data/"],
+  "ignore": ["data*/"],
   "reportExplicitAny": "none",
   "reportAny": "none",
   "reportUnknownMemberType": "none",

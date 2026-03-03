@@ -21,6 +21,7 @@ class AgentState:
     content: str | None = None
     deploy: DeployResult | None = None
     tool_call_count: int = 0
+    no_tool_call_count: int = 0
     done: bool = False
     summary: str = ""
 

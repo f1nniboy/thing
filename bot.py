@@ -11,7 +11,7 @@ from ai.api import API
 from config import ALLOWED_USERS, DISCORD_TOKEN
 from dispatch.context import ThingContext
 from dispatch.events import SUPPORTED_EVENTS
-from slash import build_thing_group
+from slash import build_settings_group, build_thing_group
 from thing.manager import ThingManager
 
 logger = logging.getLogger("bot")
@@ -44,6 +44,7 @@ class Bot(discord.Client):
     async def setup_hook(self):
         await self.manager.load_all()
         self.tree.add_command(build_thing_group(self.manager))
+        self.tree.add_command(build_settings_group(self.manager))
 
     async def on_ready(self):
         logger.info("online as %s", self.user)

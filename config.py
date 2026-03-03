@@ -22,6 +22,7 @@ OLLAMA_OPTIONS = {
 DATA_DIR = os.getenv("DATA_DIR", "./data")
 THINGS_DIR = os.path.join(DATA_DIR, "things")
 DB_DIR = os.path.join(DATA_DIR, "db")
+CONFIG_DIR = os.path.join(DATA_DIR, "config")
 
 HANDLER_TIMEOUT = float(os.getenv("HANDLER_TIMEOUT", "60"))
 MAX_TOOL_CALLS = int(os.getenv("MAX_TOOL_CALLS", "40"))
